@@ -8,14 +8,16 @@
 #define PARKBTN_PIN 11
 #define LIMITBTN_PIN 10
 
+#define RA_PLUS_PIN A0
+#define RA_MINUS_PIN A1
+
 #define LED_PIN 13
 
-#define tL1 0.2
-#define tL2 0.2
-#define tS0 0.02
-#define tA0 0
-#define ROD_MAX_LENGTH 0.2
-#define PERIOD_VA 600.0
+#define ARM_LENGTH 0.2
+#define A_ZERO 0
+#define ROD_THREAD_STEP 1.25
+#define ROD_MAX_LENGTH 0.25
+#define STEPS_PER_REV 800
 #define DEFAULT_TIME 0
 
 boolean trackBtnIsPressed = false;
@@ -36,18 +38,17 @@ long debounceDelay = 50;
 
 unsigned long t = 0;
 unsigned long startTime = 0;
-float w = 7.292e-05;
-float currentAngle = 0;//acos((tL1*tL1 + tL2*tL2 - tS0*tS0)/2*tL1*tL2);
+float trackSpeed = 7.292e-05;
+float guideRate = 0.5;
+float w = trackSpeed;
+float wPlus = trackSpeed+trackSpeed*guideRate;
+float wMinus = trackSpeed-trackSpeed*guideRate;
+
 int currentStep = 0;
-unsigned long maxStepCount = ROD_MAX_LENGTH/1.25*1600;
-float currentLength = 0;
-float newLength = 0;
+unsigned long maxStepCount = ROD_MAX_LENGTH/ROD_THREAD_STEP*STEPS_PER_REV;
 
 unsigned long stepDelay = 0;
 unsigned long stepLastTime = 0;
-
-unsigned long outerLoopDelay = PERIOD_VA*1000;
-unsigned long outerLastTime = -outerLoopDelay;
 
 unsigned long ledDelay = 500;
 unsigned long ledLastTime = 0;
@@ -57,19 +58,18 @@ boolean ledBlinkMode = false;
 unsigned long parkDelay = 1000;
 unsigned long parkLastTime = 0;
 
+unsigned long prepareStartDelay = 1000;
+unsigned long prepareStartLastTime = 0;
+
+int guidingState = 0;
+
+boolean inPrepareStartMode = false;
 boolean inTrackMode = false;
 boolean inPauseMode = false;
 boolean inParkMode = false;
 boolean btnsDisabled = false;
-boolean isMountParked = false;
 
-float mycos(float x) {
-  return - 2.21941782786353727022e-07*pow(x,10) + 2.42532401381033027481e-05*pow(x,8)
-    - 1.38627507062573673756e-03*pow(x,6) + 4.16610337354021107429e-02*pow(x,4)
-      - 4.99995582499065048420e-01*pow(x,2) + 9.99999443739537210853e-01;
-}
-
-void setup() {                
+void setup() {
   pinMode(DIR_PIN, OUTPUT);       
   pinMode(STEP_PIN, OUTPUT);   
   pinMode(RESET_PIN, OUTPUT);       
@@ -78,12 +78,22 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);     
   pinMode(TRACKBTN_PIN, INPUT_PULLUP);     
   pinMode(PARKBTN_PIN, INPUT_PULLUP);      
-  pinMode(LIMITBTN_PIN, INPUT_PULLUP);  
+  pinMode(LIMITBTN_PIN, INPUT_PULLUP);     
+  pinMode(RA_PLUS_PIN, INPUT_PULLUP);     
+  pinMode(RA_MINUS_PIN, INPUT_PULLUP);  
   digitalWrite(DIR_PIN, LOW); 
-  digitalWrite(RESET_PIN, HIGH); 
-  digitalWrite(SLEEP_PIN, HIGH); 
   digitalWrite(MICROSTEP_PIN, HIGH); 
   Serial.begin(9600);
+  
+  if (digitalRead(LIMITBTN_PIN) != LOW) {
+    digitalWrite(RESET_PIN, HIGH);  
+    digitalWrite(SLEEP_PIN, HIGH);
+    inParkMode = true;
+    //set led to blink every 1/10 second
+    ledBlinkMode = true;
+    ledDelay = 100;
+  }
+  
 }
 
 void loop() {
@@ -91,6 +101,30 @@ void loop() {
   if (!btnsDisabled) { //Если кнопки не заблокированы, т.е. не в режиме парковки
 
     if (inTrackMode) {
+    
+      //читаем гидируещие сигналы
+      if (digitalRead(RA_PLUS_PIN) == LOW) {
+        if (guidingState != 1) {
+          t = w*t/wPlus;
+          startTime = A_ZERO/wPlus;
+          w = wPlus;
+          guidingState = 1;
+        }
+      } else if (digitalRead(RA_MINUS_PIN) == LOW) {
+        if (guidingState != -1) {
+          t = w*t/wMinus;
+          startTime = A_ZERO/wMinus;
+          w = wMinus;
+          guidingState = -1;
+        }
+      } else {
+        if (guidingState != 0) {
+          t = w*t/trackSpeed;
+          startTime = A_ZERO/w;
+          w = trackSpeed;
+          guidingState = 0;
+        }
+      }
       //В режиме ведения воспользоваться можно только кнопкой "Пауза"
       int trackBtnread = digitalRead(TRACKBTN_PIN);
 
@@ -178,7 +212,7 @@ void loop() {
       trackBtnLastState = trackBtnread;
       parkBtnLastState = parkBtnread;
 
-    } else { //Если монти ни в каком режиме, т.е. стартовая позиция
+    } else if (!inPrepareStartMode) { //Если монти ни в каком режиме, т.е. стартовая позиция
 
       int trackBtnread = digitalRead(TRACKBTN_PIN);
 
@@ -191,12 +225,14 @@ void loop() {
           Serial.print("Pause pressed in no mode\n");
           if (!trackBtnIsPressed) {
             trackBtnIsPressed = true;
-            inTrackMode = true;
+            inPrepareStartMode = true;
+            prepareStartLastTime = millis();
             //set led to blink every second
             ledBlinkMode = true;
-            ledDelay = 1000;
-            startTime = millis() + DEFAULT_TIME;
-            stepDelay = 1000000/(0.2*w*cos(w*DEFAULT_TIME/2000))/800*0.00125;
+            ledDelay = 1000; 
+            //switch motor to active mode
+            digitalWrite(SLEEP_PIN, HIGH);
+            digitalWrite(RESET_PIN, HIGH);  
             //set 1/8 microstepping mode
             digitalWrite(MICROSTEP_PIN, HIGH);
             //set motor direction
@@ -212,6 +248,13 @@ void loop() {
     }
 
   }
+  
+  if (inPrepareStartMode && millis()-prepareStartLastTime > prepareStartDelay) {
+    inPrepareStartMode = false;
+    inTrackMode = true;
+    startTime = millis() + DEFAULT_TIME;
+    stepDelay = 1000000/(0.2*w*cos(w*DEFAULT_TIME/2000))/800*0.00125;
+  }
 
   if (inParkMode) {
     if (digitalRead(LIMITBTN_PIN) != LOW) {
@@ -223,8 +266,6 @@ void loop() {
     } else {
       Serial.print("Limit btn high\n");
       currentStep = 0;
-      currentLength = tS0;
-      currentAngle = 0;
       inParkMode = false;
       inPauseMode = false;
       inTrackMode = false;
@@ -234,6 +275,9 @@ void loop() {
       //set led to light constantly
       ledState = HIGH;				
       ledBlinkMode = false;
+      //switch motor to sleep mode
+      digitalWrite(SLEEP_PIN, LOW);
+      digitalWrite(RESET_PIN, LOW);  
     }
   }
   
@@ -248,7 +292,7 @@ void loop() {
         digitalWrite(STEP_PIN, LOW);
         stepLastTime = micros(); 
         currentStep++;
-        stepDelay = 1000000/(0.2*w*cos(w*t/2000))/800*0.00125;
+        stepDelay = 1000000/(ARM_LENGTH*w*cos(w*t/2000))/800*0.00125;
       }
     }
   }
@@ -263,4 +307,3 @@ void loop() {
   }
 
 }
-
