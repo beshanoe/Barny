@@ -13,8 +13,6 @@
 
 #define LED_PIN 13
 
-#define ARM_LENGTH 0.2
-#define A_ZERO 0
 #define ROD_THREAD_STEP 1.25
 #define ROD_MAX_LENGTH 0.25
 #define STEPS_PER_REV 800
@@ -38,7 +36,6 @@ long debounceDelay = 50;
 
 unsigned long t = 0;
 unsigned long startTime = 0;
-float trackSpeed = 7.292e-05;
 float guideRate = 0.5;
 float w = trackSpeed;
 float wPlus = trackSpeed+trackSpeed*guideRate;
@@ -106,7 +103,6 @@ void loop() {
       if (digitalRead(RA_PLUS_PIN) == LOW) {
         if (guidingState != 1) {
           t = w*t/wPlus;
-          startTime = A_ZERO/wPlus;
           w = wPlus;
           guidingState = 1;
         }
@@ -138,7 +134,6 @@ void loop() {
             Serial.print("Pause pressed in track\n");
             trackBtnIsPressed = true;
 
-            inPauseMode = true; //Перевести
             //btnsDisabled = true;
             //set led to light constantly
             ledState = HIGH;				
@@ -253,7 +248,6 @@ void loop() {
     inPrepareStartMode = false;
     inTrackMode = true;
     startTime = millis() + DEFAULT_TIME;
-    stepDelay = 1000000/(0.2*w*cos(w*DEFAULT_TIME/2000))/800*0.00125;
   }
 
   if (inParkMode) {
