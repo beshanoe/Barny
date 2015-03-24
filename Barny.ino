@@ -13,7 +13,9 @@
 
 #define LED_PIN 13
 
-#define ROD_THREAD_STEP 1.25
+#define ARM_LENGTH 0.235
+#define A_ZERO 0.795259363
+#define ROD_THREAD_STEP 0.00125
 #define ROD_MAX_LENGTH 0.25
 #define STEPS_PER_REV 800
 #define DEFAULT_TIME 0
@@ -36,10 +38,14 @@ long debounceDelay = 50;
 
 unsigned long t = 0;
 unsigned long startTime = 0;
+float trackSpeed = 7.292e-08;
 float guideRate = 0.5;
 float w = trackSpeed;
 float wPlus = trackSpeed+trackSpeed*guideRate;
 float wMinus = trackSpeed-trackSpeed*guideRate;
+unsigned long tZero = A_ZERO/w;
+
+const float K = 1000/ARM_LENGTH/STEPS_PER_REV*ROD_THREAD_STEP;
 
 int currentStep = 0;
 unsigned long maxStepCount = ROD_MAX_LENGTH/ROD_THREAD_STEP*STEPS_PER_REV;
@@ -65,6 +71,10 @@ boolean inTrackMode = false;
 boolean inPauseMode = false;
 boolean inParkMode = false;
 boolean btnsDisabled = false;
+
+void calcStepDelay(unsigned long t) {
+  stepDelay = K/(w*cos(w*t/2));
+}
 
 void setup() {
   pinMode(DIR_PIN, OUTPUT);       
@@ -102,23 +112,27 @@ void loop() {
       //читаем гидируещие сигналы
       if (digitalRead(RA_PLUS_PIN) == LOW) {
         if (guidingState != 1) {
-          t = w*t/wPlus;
+          t = (w*t)/wPlus;
+	  startTime = millis() - t;
           w = wPlus;
           guidingState = 1;
+	  calcStepDelay(t);
         }
       } else if (digitalRead(RA_MINUS_PIN) == LOW) {
         if (guidingState != -1) {
-          t = w*t/wMinus;
-          startTime = A_ZERO/wMinus;
+	  t = (w*t)/wMinus;
+	  startTime = millis() - t;
           w = wMinus;
           guidingState = -1;
+  	  calcStepDelay(t);
         }
       } else {
         if (guidingState != 0) {
-          t = w*t/trackSpeed;
-          startTime = A_ZERO/w;
+	  t = (w*t)/trackSpeed;
+	  startTime = millis() - t;
           w = trackSpeed;
           guidingState = 0;
+	  calcStepDelay(t);
         }
       }
       //В режиме ведения воспользоваться можно только кнопкой "Пауза"
@@ -134,6 +148,7 @@ void loop() {
             Serial.print("Pause pressed in track\n");
             trackBtnIsPressed = true;
 
+            inPauseMode = true;
             //btnsDisabled = true;
             //set led to light constantly
             ledState = HIGH;				
@@ -246,8 +261,9 @@ void loop() {
   
   if (inPrepareStartMode && millis()-prepareStartLastTime > prepareStartDelay) {
     inPrepareStartMode = false;
-    inTrackMode = true;
-    startTime = millis() + DEFAULT_TIME;
+    inTrackMode = true;Serial.print(tZero);Serial.print("\n");
+    startTime = millis() - tZero;
+	calcStepDelay(tZero);
   }
 
   if (inParkMode) {
@@ -286,7 +302,7 @@ void loop() {
         digitalWrite(STEP_PIN, LOW);
         stepLastTime = micros(); 
         currentStep++;
-        stepDelay = 1000000/(ARM_LENGTH*w*cos(w*t/2000))/800*0.00125;
+        stepDelay = K/(w*cos(w*t/2));
       }
     }
   }
@@ -301,3 +317,4 @@ void loop() {
   }
 
 }
+
